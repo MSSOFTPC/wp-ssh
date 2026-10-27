@@ -1,5 +1,7 @@
 # WP SSH: Self-Hosted AI Bridge for WordPress
 
+![Demo](assets/demo.gif)
+
 ![License: GPL v2+](https://img.shields.io/badge/license-GPLv2%2B-blue)
 ![Self-hosted](https://img.shields.io/badge/self--hosted-yes-brightgreen)
 ![No SaaS](https://img.shields.io/badge/third--party%20server-none-brightgreen)
