@@ -31,6 +31,7 @@ class WP_SSH_Admin {
 		$settings['enabled']               = ! empty( $_POST['enabled'] );
 		$settings['read_only_mode']        = ! empty( $_POST['read_only_mode'] );
 		$settings['allow_write_queries']   = ! empty( $_POST['allow_write_queries'] );
+		$settings['allow_root_files']      = ! empty( $_POST['allow_root_files'] );
 		$settings['ip_allowlist']          = isset( $_POST['ip_allowlist'] ) ? sanitize_textarea_field( wp_unslash( $_POST['ip_allowlist'] ) ) : '';
 		$settings['site_label']            = isset( $_POST['site_label'] ) ? sanitize_text_field( wp_unslash( $_POST['site_label'] ) ) : '';
 		$settings['health_check_enabled']  = ! empty( $_POST['health_check_enabled'] );
@@ -121,6 +122,13 @@ class WP_SSH_Admin {
 						<th scope="row">Allow write queries</th>
 						<td>
 							<label><input type="checkbox" name="allow_write_queries" value="1" <?php checked( ! empty( $settings['allow_write_queries'] ) ); ?> /> Allow INSERT/UPDATE/DELETE via the db_query action (off = read-only SQL)</label>
+						</td>
+					</tr>
+					<tr>
+						<th scope="row">Allow root-level file access</th>
+						<td>
+							<label><input type="checkbox" name="allow_root_files" value="1" <?php checked( ! empty( $settings['allow_root_files'] ) ); ?> /> Let file_read/file_write/file_list/file_restore reach outside wp-content (site root — wp-config.php, .htaccess, .user.ini) when a request explicitly passes <code>"root": true</code></label>
+							<p class="description"><strong>Off by default.</strong> The rest of this plugin is scoped to <code>wp-content</code> only. Turning this on gives it the ability to edit files anywhere in the WordPress install, including server-level PHP config (e.g. upload size limits) — only enable it if you understand that trade-off, and turn it back off when you're done.</p>
 						</td>
 					</tr>
 					<tr>

@@ -223,15 +223,21 @@ To report a vulnerability, please open a private security advisory on GitHub ins
 | `plugin_list` | – |
 | `plugin_activate` | `file` |
 | `plugin_deactivate` | `file` |
+| `plugin_install` | `content_base64`, `confirm`, `activate?`, `overwrite?` | Installs from a base64-encoded `.zip` via WordPress's own `Plugin_Upgrader` (same path as wp-admin's "Upload Plugin"). No arbitrary URL fetching. |
 | `theme_list` | – |
+| `theme_install` | `content_base64`, `confirm`, `activate?`, `overwrite?` | Same as `plugin_install`, via `Theme_Upgrader`. |
 
-### Files (scoped to `wp-content/`)
+### Files (scoped to `wp-content/` by default)
 | Action | Params | Notes |
 |---|---|---|
-| `file_list` | `path?` | Directory listing. |
-| `file_read` | `path` | Path is relative to `wp-content`. |
-| `file_write` | `path`, `content`, `skip_backup?` | Auto-backs up the existing file first. |
-| `file_restore` | `path`, `backup?` (1-3, default 1), `confirm` | Restores from a `.wpssh-bak-N` copy. |
+| `file_list` | `path?`, `root?` | Directory listing. |
+| `file_read` | `path`, `root?` | Path is relative to `wp-content` (or to the site root if `root: true`). |
+| `file_write` | `path`, `content`, `skip_backup?`, `root?`, `confirm?` | Auto-backs up the existing file first. `confirm: true` required when `root: true`. |
+| `file_restore` | `path`, `backup?` (1-3, default 1), `confirm`, `root?` | Restores from a `.wpssh-bak-N` copy. |
+
+All file paths are resolved with `realpath()` and rejected if they escape the allowed base directory — no `../` traversal outside it.
+
+**Root-level access** (`"root": true`) reaches outside `wp-content` — `wp-config.php`, `.htaccess`, `.user.ini`, anything in the WordPress install root. It only works when **both** the request passes `root: true` **and** the "Allow root-level file access" setting is turned on in Tools → WP SSH (**off by default**). This is the escape hatch for things WordPress itself can't control, like `upload_max_filesize`/`post_max_size`. Leave it off unless you specifically need it.
 
 ### Database
 | Action | Params | Notes |
@@ -264,6 +270,7 @@ To report a vulnerability, please open a private security advisory on GitHub ins
 - **Enable bridge:** master on/off switch.
 - **Read-only mode:** blocks every write action regardless of other settings.
 - **Allow write queries:** required (in addition to `confirm: true`) for non-`SELECT` SQL via `db_query`.
+- **Allow root-level file access:** lets `file_*` actions reach outside `wp-content` when a request passes `"root": true`. Off by default; see the Files section above.
 - **IP allowlist:** one IP per line; empty = any IP (still requires the key).
 - **Health check emails:** hourly self-check with an alert email if something looks wrong.
 - **Regenerate secret key:** invalidates the old key immediately.

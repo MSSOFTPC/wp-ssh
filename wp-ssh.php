@@ -2,7 +2,7 @@
 /**
  * Plugin Name: WP SSH (Remote Bridge)
  * Description: A private, self-hosted remote management bridge for this site. Lets you (or a trusted assistant) manage options, content, media, plugins and theme files over an authenticated HTTPS endpoint instead of raw SSH. Not intended for public distribution — each install generates its own unique secret key and is scoped to safe, whitelisted actions only.
- * Version: 1.2.0
+ * Version: 1.3.0
  * Author: MOHD SAMAR
  * License: GPLv2 or later
  * Text Domain: wp-ssh
@@ -12,7 +12,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WP_SSH_VERSION', '1.2.0' );
+define( 'WP_SSH_VERSION', '1.3.0' );
 define( 'WP_SSH_DIR', plugin_dir_path( __FILE__ ) );
 define( 'WP_SSH_OPTION', 'wp_ssh_settings' );
 
@@ -42,6 +42,10 @@ function wp_ssh_activate() {
 
 	if ( ! isset( $settings['allow_write_queries'] ) ) {
 		$settings['allow_write_queries'] = false;
+	}
+
+	if ( ! isset( $settings['allow_root_files'] ) ) {
+		$settings['allow_root_files'] = false; // Off by default — file actions stay scoped to wp-content unless explicitly enabled.
 	}
 
 	if ( ! isset( $settings['read_only_mode'] ) ) {

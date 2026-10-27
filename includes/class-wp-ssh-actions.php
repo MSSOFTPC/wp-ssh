@@ -51,6 +51,8 @@ class WP_SSH_Actions {
 			'cron_run'               => 'cron_run',
 			'health_check_status'    => 'health_check_status',
 			'health_check_run'       => 'health_check_run',
+			'plugin_install'         => 'plugin_install',
+			'theme_install'          => 'theme_install',
 		);
 	}
 
@@ -61,7 +63,7 @@ class WP_SSH_Actions {
 			'media_upload', 'plugin_activate', 'plugin_deactivate', 'file_write', 'db_query',
 			'cache_clear', 'search_replace', 'product_attribute_set', 'menu_item_add', 'widget_add',
 			'elementor_data_set', 'order_update_status', 'file_restore', 'template_import',
-			'cron_run', 'health_check_run',
+			'cron_run', 'health_check_run', 'plugin_install', 'theme_install',
 		);
 	}
 
@@ -416,19 +418,28 @@ class WP_SSH_Actions {
 	}
 
 	/* ---------------------------------------------------------------- */
-	/* File access is strictly contained inside wp-content.             */
+	/* File access is contained inside wp-content by default. Root-level */
+	/* access (site root: wp-config.php, .htaccess, .user.ini, etc.) is  */
+	/* only allowed when BOTH the "Allow root-level file access" setting */
+	/* is on AND the request explicitly passes "root": true.             */
 
-	protected static function resolve_scoped_path( $relative ) {
-		$base = realpath( WP_CONTENT_DIR );
-		$target = realpath( WP_CONTENT_DIR . '/' . ltrim( $relative, '/' ) );
+	protected static function root_files_allowed() {
+		$settings = get_option( WP_SSH_OPTION, array() );
+		return ! empty( $settings['allow_root_files'] );
+	}
+
+	protected static function resolve_scoped_path( $relative, $use_root = false ) {
+		$root_dir = $use_root ? rtrim( ABSPATH, '/' ) : WP_CONTENT_DIR;
+		$base     = realpath( $root_dir );
+		$target   = realpath( $root_dir . '/' . ltrim( $relative, '/' ) );
 
 		// For writes, the target may not exist yet — resolve its parent dir instead.
 		if ( false === $target ) {
-			$parent = realpath( dirname( WP_CONTENT_DIR . '/' . ltrim( $relative, '/' ) ) );
+			$parent = realpath( dirname( $root_dir . '/' . ltrim( $relative, '/' ) ) );
 			if ( false === $parent || 0 !== strpos( $parent, $base ) ) {
 				return false;
 			}
-			return WP_CONTENT_DIR . '/' . ltrim( $relative, '/' );
+			return $root_dir . '/' . ltrim( $relative, '/' );
 		}
 
 		if ( 0 !== strpos( $target, $base ) ) {
@@ -438,24 +449,46 @@ class WP_SSH_Actions {
 		return $target;
 	}
 
+	/** Resolves the "root" param against the setting gate, returning a WP_Error if misused. */
+	protected static function want_root( $params ) {
+		if ( empty( $params['root'] ) ) {
+			return false;
+		}
+		if ( ! self::root_files_allowed() ) {
+			return new WP_Error( 'root_access_disabled', 'Root-level file access is off. Enable "Allow root-level file access" in Tools > WP SSH to use "root": true.', array( 'status' => 403 ) );
+		}
+		return true;
+	}
+
 	public static function file_read( $params ) {
 		if ( empty( $params['path'] ) ) {
-			return new WP_Error( 'missing_param', 'Missing "path" (relative to wp-content).', array( 'status' => 400 ) );
+			return new WP_Error( 'missing_param', 'Missing "path" (relative to wp-content, or to site root if "root": true).', array( 'status' => 400 ) );
 		}
-		$path = self::resolve_scoped_path( $params['path'] );
+		$use_root = self::want_root( $params );
+		if ( is_wp_error( $use_root ) ) {
+			return $use_root;
+		}
+		$path = self::resolve_scoped_path( $params['path'], $use_root );
 		if ( ! $path || ! is_file( $path ) ) {
-			return new WP_Error( 'not_found', 'File not found or outside wp-content.', array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', 'File not found or outside the allowed scope.', array( 'status' => 404 ) );
 		}
 		return array( 'path' => $params['path'], 'content' => file_get_contents( $path ) );
 	}
 
 	public static function file_write( $params ) {
 		if ( empty( $params['path'] ) || ! isset( $params['content'] ) ) {
-			return new WP_Error( 'missing_param', 'Missing "path" or "content" (relative to wp-content).', array( 'status' => 400 ) );
+			return new WP_Error( 'missing_param', 'Missing "path" or "content" (relative to wp-content, or to site root if "root": true).', array( 'status' => 400 ) );
 		}
-		$path = self::resolve_scoped_path( $params['path'] );
+		$use_root = self::want_root( $params );
+		if ( is_wp_error( $use_root ) ) {
+			return $use_root;
+		}
+		if ( $use_root && empty( $params['confirm'] ) ) {
+			return new WP_Error( 'confirm_required', 'Writing to a root-level file (outside wp-content) requires "confirm": true.', array( 'status' => 400 ) );
+		}
+		$path = self::resolve_scoped_path( $params['path'], $use_root );
 		if ( ! $path ) {
-			return new WP_Error( 'bad_path', 'Path must stay inside wp-content.', array( 'status' => 400 ) );
+			return new WP_Error( 'bad_path', 'Path must stay inside the allowed scope.', array( 'status' => 400 ) );
 		}
 		$dir = dirname( $path );
 		if ( ! is_dir( $dir ) ) {
@@ -498,9 +531,13 @@ class WP_SSH_Actions {
 
 	public static function file_list( $params ) {
 		$relative = isset( $params['path'] ) ? $params['path'] : '';
-		$path     = self::resolve_scoped_path( $relative );
+		$use_root = self::want_root( $params );
+		if ( is_wp_error( $use_root ) ) {
+			return $use_root;
+		}
+		$path = self::resolve_scoped_path( $relative, $use_root );
 		if ( ! $path || ! is_dir( $path ) ) {
-			return new WP_Error( 'not_found', 'Directory not found or outside wp-content.', array( 'status' => 404 ) );
+			return new WP_Error( 'not_found', 'Directory not found or outside the allowed scope.', array( 'status' => 404 ) );
 		}
 		$items = array();
 		foreach ( scandir( $path ) as $item ) {
@@ -881,7 +918,10 @@ class WP_SSH_Actions {
 			return new WP_Error( 'bad_json', 'data must be valid Elementor JSON.', array( 'status' => 400 ) );
 		}
 
-		update_post_meta( $post_id, '_elementor_data', $data );
+		// Elementor hooks its own save handler onto this meta key and unslashes the value,
+		// assuming it always arrives via its AJAX editor (where WP has already slashed
+		// $_POST). Since we write directly, pre-slash so that unslash step is a no-op.
+		update_post_meta( $post_id, '_elementor_data', wp_slash( $data ) );
 		delete_post_meta( $post_id, '_elementor_css' );
 		delete_post_meta( $post_id, '_elementor_element_cache' );
 
@@ -985,11 +1025,15 @@ class WP_SSH_Actions {
 
 	public static function file_restore( $params ) {
 		if ( empty( $params['path'] ) ) {
-			return new WP_Error( 'missing_param', 'Missing "path" (relative to wp-content).', array( 'status' => 400 ) );
+			return new WP_Error( 'missing_param', 'Missing "path" (relative to wp-content, or to site root if "root": true).', array( 'status' => 400 ) );
 		}
-		$path = self::resolve_scoped_path( $params['path'] );
+		$use_root = self::want_root( $params );
+		if ( is_wp_error( $use_root ) ) {
+			return $use_root;
+		}
+		$path = self::resolve_scoped_path( $params['path'], $use_root );
 		if ( ! $path ) {
-			return new WP_Error( 'bad_path', 'Path must stay inside wp-content.', array( 'status' => 400 ) );
+			return new WP_Error( 'bad_path', 'Path must stay inside the allowed scope.', array( 'status' => 400 ) );
 		}
 		$slot        = isset( $params['backup'] ) ? max( 1, absint( $params['backup'] ) ) : 1;
 		$backup_path = $path . '.wpssh-bak-' . $slot;
@@ -1068,7 +1112,7 @@ class WP_SSH_Actions {
 		}
 		$post_id = $result;
 
-		update_post_meta( $post_id, '_elementor_data', $data );
+		update_post_meta( $post_id, '_elementor_data', wp_slash( $data ) );
 		update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
 		if ( ! empty( $params['elementor_page_settings'] ) ) {
 			update_post_meta( $post_id, '_elementor_page_settings', $params['elementor_page_settings'] );
@@ -1212,5 +1256,117 @@ class WP_SSH_Actions {
 		update_option( WP_SSH_OPTION, $settings );
 		WP_SSH_Auth::log_action( 'health_check_run', $result['ok'] ? 'OK' : count( $result['issues'] ) . ' issue(s)' );
 		return $result;
+	}
+
+	/* ---------------------------------------------------------------- */
+	/* Plugin / theme install — uses WordPress's own upgrader classes,   */
+	/* the same code path wp-admin's "Upload Plugin/Theme" screen uses.  */
+	/* Takes a base64-encoded zip; no arbitrary URL fetching involved.   */
+
+	protected static function decode_zip_upload( $params ) {
+		if ( empty( $params['content_base64'] ) ) {
+			return new WP_Error( 'missing_param', 'Missing "content_base64" (base64-encoded .zip file).', array( 'status' => 400 ) );
+		}
+		if ( empty( $params['confirm'] ) ) {
+			return new WP_Error( 'confirm_required', 'Installing new code requires "confirm": true in params.', array( 'status' => 400 ) );
+		}
+		$data = base64_decode( $params['content_base64'], true );
+		if ( false === $data || '' === $data ) {
+			return new WP_Error( 'bad_data', 'Invalid base64 content.', array( 'status' => 400 ) );
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/file.php';
+		$tmp_file = wp_tempnam( 'wpssh-install.zip' );
+		if ( false === file_put_contents( $tmp_file, $data ) ) { // phpcs:ignore
+			return new WP_Error( 'write_failed', 'Could not write temporary upload file.', array( 'status' => 500 ) );
+		}
+		return $tmp_file;
+	}
+
+	public static function plugin_install( $params ) {
+		$tmp_file = self::decode_zip_upload( $params );
+		if ( is_wp_error( $tmp_file ) ) {
+			return $tmp_file;
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/misc.php';
+		require_once ABSPATH . 'wp-admin/includes/template.php';
+		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+		require_once ABSPATH . 'wp-admin/includes/plugin.php';
+
+		$skin     = new Automatic_Upgrader_Skin();
+		$upgrader = new Plugin_Upgrader( $skin );
+		$result   = $upgrader->install( $tmp_file, array( 'overwrite_package' => ! empty( $params['overwrite'] ) ) );
+
+		@unlink( $tmp_file ); // phpcs:ignore
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+		if ( is_wp_error( $skin->result ) ) {
+			return $skin->result;
+		}
+		if ( ! $result ) {
+			return new WP_Error( 'install_failed', 'Plugin installation failed — the zip may not be a valid plugin package.', array( 'status' => 500 ) );
+		}
+
+		$plugin_file = $upgrader->plugin_info();
+		if ( ! $plugin_file ) {
+			return new WP_Error( 'install_failed', 'Installed, but could not determine the plugin file to activate.', array( 'status' => 500 ) );
+		}
+
+		$activated = false;
+		if ( ! empty( $params['activate'] ) ) {
+			$activate_result = activate_plugin( $plugin_file );
+			$activated        = ! is_wp_error( $activate_result );
+		}
+
+		WP_SSH_Auth::log_action( 'plugin_install', $plugin_file . ( $activated ? ' (activated)' : '' ) );
+
+		return array( 'plugin_file' => $plugin_file, 'activated' => $activated );
+	}
+
+	public static function theme_install( $params ) {
+		$tmp_file = self::decode_zip_upload( $params );
+		if ( is_wp_error( $tmp_file ) ) {
+			return $tmp_file;
+		}
+
+		require_once ABSPATH . 'wp-admin/includes/misc.php';
+		require_once ABSPATH . 'wp-admin/includes/template.php';
+		require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+		require_once ABSPATH . 'wp-admin/includes/theme.php';
+
+		$skin     = new Automatic_Upgrader_Skin();
+		$upgrader = new Theme_Upgrader( $skin );
+		$result   = $upgrader->install( $tmp_file, array( 'overwrite_package' => ! empty( $params['overwrite'] ) ) );
+
+		@unlink( $tmp_file ); // phpcs:ignore
+
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
+		if ( is_wp_error( $skin->result ) ) {
+			return $skin->result;
+		}
+		if ( ! $result ) {
+			return new WP_Error( 'install_failed', 'Theme installation failed — the zip may not be a valid theme package.', array( 'status' => 500 ) );
+		}
+
+		$theme_slug = $upgrader->theme_info();
+		$stylesheet = is_object( $theme_slug ) ? $theme_slug->get_stylesheet() : $theme_slug;
+		if ( ! $stylesheet ) {
+			return new WP_Error( 'install_failed', 'Installed, but could not determine the theme slug to activate.', array( 'status' => 500 ) );
+		}
+
+		$activated = false;
+		if ( ! empty( $params['activate'] ) ) {
+			switch_theme( $stylesheet );
+			$activated = true;
+		}
+
+		WP_SSH_Auth::log_action( 'theme_install', $stylesheet . ( $activated ? ' (activated)' : '' ) );
+
+		return array( 'theme' => $stylesheet, 'activated' => $activated );
 	}
 }
