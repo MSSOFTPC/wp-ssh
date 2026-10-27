@@ -1,24 +1,67 @@
-# WP SSH — Remote Management Bridge
+# WP SSH: Self-Hosted AI Bridge for WordPress
 
-A private, self-hosted WordPress plugin that lets you (or a trusted AI assistant like Claude) manage a site over an authenticated HTTPS endpoint instead of raw SSH / WP-CLI access.
+![License: GPL v2+](https://img.shields.io/badge/license-GPLv2%2B-blue)
+![Self-hosted](https://img.shields.io/badge/self--hosted-yes-brightgreen)
+![No SaaS](https://img.shields.io/badge/third--party%20server-none-brightgreen)
 
-**This is not a public/multi-tenant tool.** It is meant to be installed manually on sites *you personally manage*. Each install generates its own unique secret key and detects its own site automatically — nothing is shared across installs.
+**Let Claude, ChatGPT or any AI agent manage your WordPress site, without giving out SSH access.**
 
-> ⚠️ **Read this before installing.** With write actions enabled, this plugin can write PHP files inside `wp-content`, run arbitrary SQL, and activate/deactivate plugins. Anyone who obtains your secret key has meaningful control over the site. Keep the key private, use HTTPS only, and turn on **Read-only mode** or an **IP allowlist** when you don't need full write access.
+WP SSH is a **privacy-first, self-hosted WordPress plugin** that exposes a small, whitelisted set of actions over one authenticated HTTPS endpoint. Posts, WooCommerce orders, Elementor pages, files, diagnostics and more can be read or changed by your AI assistant or script, with logging, backups and confirm-tokens on anything destructive.
+
+- **Self-hosted:** the plugin runs entirely on your own WordPress. No accounts, no cloud relay, no SaaS in the middle.
+- **No SSH / cPanel credentials:** your AI gets scoped actions, not a shell.
+- **Safe by default:** read-only mode, IP allowlist, lockout, rotating file backups, activity log.
+- **Built for real sites:** WooCommerce, Elementor, serialization-safe search-replace, health checks.
+
+> **Privacy note:** the plugin itself never sends your data to any third party. What your AI assistant sees is whatever you let it request through the bridge. Use Read-only mode and the IP allowlist to control that. Remember that responses go to the AI provider you connect (Anthropic, OpenAI, etc.) under *their* privacy terms.
 
 ---
 
-## Why this exists
+## Table of contents
 
-Managing WordPress sites normally means either giving out full SSH/cPanel credentials, or doing everything by hand through wp-admin. This plugin exposes a small, whitelisted set of actions over a single REST endpoint, so a script (or an AI assistant with an HTTP tool) can:
-
-- Read diagnostics, options, posts, media, plugins, themes, orders
-- Make scoped changes (update a post, set a product attribute, clear cache, edit a file inside `wp-content`) without needing shell access
-- Do it all with logging, rate-limiting, confirm-tokens on destructive actions, and automatic backups
+- [What can your AI do with it?](#what-can-your-ai-do-with-it)
+- [How it compares](#how-it-compares)
+- [Quick start (2 minutes)](#quick-start-2-minutes)
+- [Connect your AI](#connect-your-ai)
+- [Authentication](#authentication)
+- [Security](#security)
+- [Available actions](#available-actions)
+- [Settings reference](#settings-reference-tools--wp-ssh)
+- [FAQ](#faq)
+- [Roadmap](#roadmap)
+- [License](#license)
 
 ---
 
-## Installation
+## What can your AI do with it?
+
+Example prompts you can give an assistant that has the bridge as an HTTP tool:
+
+- "Run diagnostics on my site and tell me what is slowing it down."
+- "List all draft posts and publish the ones tagged `ready`."
+- "Set the `Color` attribute on product 482 to Red, Blue and Green."
+- "Copy the Elementor design of page 120 to my second site."
+- "Do a dry-run search-replace from `http://old.com` to `https://new.com` and show me what would change."
+- "Check my WooCommerce orders from today and mark the paid ones as `processing`."
+- "Clear the Elementor cache after the last edit."
+
+---
+
+## How it compares
+
+| | WP SSH | Raw SSH / WP-CLI | Managed dashboards (SaaS) |
+|---|---|---|---|
+| Needs shell credentials | **No** | Yes | Sometimes |
+| Third-party server in the middle | **No** | No | Yes |
+| Scoped, whitelisted actions | **Yes** | No (full shell) | Varies |
+| Read-only mode | **Yes** | No | Varies |
+| Automatic file backups | **Yes** | No | Varies |
+| Designed for AI agents | **Yes** | No | Rarely |
+| Elementor + WooCommerce actions | **Yes** | Via extra plugins | Varies |
+
+---
+
+## Quick start (2 minutes)
 
 1. Download `wp-ssh.zip` (or clone this repo into `wp-content/plugins/wp-ssh/`).
 2. In wp-admin: **Plugins → Add New → Upload Plugin**, upload the zip, **Activate**.
@@ -26,11 +69,39 @@ Managing WordPress sites normally means either giving out full SSH/cPanel creden
 4. Copy the auto-generated **Secret key**.
 5. Check **Enable bridge**, save settings.
 
-That's it — the site is now reachable at:
+Your site is now reachable at:
 
 ```
 POST https://yoursite.com/wp-json/wp-ssh/v1/execute
 ```
+
+**Recommended first settings:** turn on **Read-only mode** while you test, and add your own IP to the **IP allowlist**.
+
+---
+
+## Connect your AI
+
+Any model or tool that can make an HTTPS request can use the bridge: Claude, ChatGPT (custom actions / tools), Gemini, local LLMs, n8n, Make, Zapier or a plain script.
+
+Give the assistant:
+
+1. The endpoint: `https://yoursite.com/wp-json/wp-ssh/v1/execute`
+2. The header: `X-WPSSH-Key: <your-secret-key>`
+3. The request shape: `{ "action": "...", "params": { ... } }`
+4. The list of actions from [Available actions](#available-actions) below.
+
+Suggested instruction for your agent:
+
+```
+You can manage my WordPress site through one HTTP endpoint.
+POST JSON {"action": "<name>", "params": {...}} with header X-WPSSH-Key.
+Always start with "site_info" or "diagnostics". Prefer read actions first.
+For any destructive action (force delete, restore, non-SELECT SQL), explain
+what you will do and wait for my approval before sending "confirm": true.
+Use "dry_run": true for search_replace before running it for real.
+```
+
+> MCP (Model Context Protocol) wrapper and OpenAPI schema are on the [roadmap](#roadmap).
 
 ---
 
@@ -64,25 +135,7 @@ or, on failure:
 { "code": "wp_ssh_bad_key", "message": "Invalid or missing secret key.", "data": { "status": 401 } }
 ```
 
-### Unauthenticated ping
-
-`GET /wp-json/wp-ssh/v1/ping` returns `{ plugin, version, site, label }` — useful to confirm the plugin is installed and to auto-detect which site you're talking to, without needing the key.
-
-### Security features
-
-| Feature | What it does |
-|---|---|
-| Secret key | 64-char random key per install, compared with `hash_equals()`. |
-| IP allowlist | Optional — restrict `/execute` to specific IPs. |
-| Lockout | 5 failed key attempts from an IP → 15 minute lockout. |
-| Read-only mode | One toggle blocks every write action; safe for pure browsing/diagnostics. |
-| Confirm tokens | Permanent delete, restore, and non-`SELECT` SQL require `"confirm": true` in params. |
-| Auto-backup | `file_write` keeps up to 3 rotating `.wpssh-bak-N` copies before overwriting; `file_restore` brings one back. |
-| Activity log | Last 100 actions (time, IP, action, summary) shown in Tools → WP SSH. |
-
----
-
-## Example: curl
+### Example: curl
 
 ```bash
 curl -X POST https://yoursite.com/wp-json/wp-ssh/v1/execute \
@@ -90,6 +143,39 @@ curl -X POST https://yoursite.com/wp-json/wp-ssh/v1/execute \
   -H "Content-Type: application/json" \
   -d '{"action": "diagnostics", "params": {}}'
 ```
+
+### Unauthenticated ping
+
+`GET /wp-json/wp-ssh/v1/ping` returns `{ plugin, version, site, label }`. Use it to confirm the plugin is installed and to auto-detect which site you are talking to, without needing the key.
+
+---
+
+## Security
+
+> ⚠️ **Read this before installing.** With write actions enabled, this plugin can write PHP files inside `wp-content`, run arbitrary SQL, and activate/deactivate plugins. Anyone who obtains your secret key has meaningful control over the site. Keep the key private, use HTTPS only, and turn on **Read-only mode** or an **IP allowlist** when you do not need full write access.
+
+| Feature | What it does |
+|---|---|
+| Secret key | 64-char random key per install, compared with `hash_equals()`. |
+| IP allowlist | Optional. Restricts `/execute` to specific IPs. |
+| Lockout | 5 failed key attempts from an IP → 15 minute lockout. |
+| Read-only mode | One toggle blocks every write action; safe for pure browsing and diagnostics. |
+| Confirm tokens | Permanent delete, restore, and non-`SELECT` SQL require `"confirm": true` in params. |
+| Auto-backup | `file_write` keeps up to 3 rotating `.wpssh-bak-N` copies before overwriting; `file_restore` brings one back. |
+| Path scoping | File paths are resolved with `realpath()` and rejected if they escape `wp-content`. |
+| Activity log | Last 100 actions (time, IP, action, summary) shown in Tools → WP SSH. |
+
+### Recommended hardening checklist
+
+- [ ] Serve the site over **HTTPS only**.
+- [ ] Keep **Read-only mode** on unless you are actively making changes.
+- [ ] Set an **IP allowlist** if your AI tool calls from a fixed IP.
+- [ ] Leave **Allow write queries** off unless you need it.
+- [ ] Never paste the secret key into public chats, screenshots or repos.
+- [ ] **Regenerate the secret key** after sharing it with a tool you stop using.
+- [ ] Review the **Activity log** regularly.
+
+To report a vulnerability, please open a private security advisory on GitHub instead of a public issue.
 
 ---
 
@@ -129,7 +215,7 @@ curl -X POST https://yoursite.com/wp-json/wp-ssh/v1/execute \
 | Action | Params |
 |---|---|
 | `media_list` | `limit?` |
-| `media_upload` | `filename`, `content_base64`, `title?` — jpg/jpeg/png/gif/webp/svg only |
+| `media_upload` | `filename`, `content_base64`, `title?` (jpg/jpeg/png/gif/webp/svg only) |
 
 ### Plugins & themes
 | Action | Params |
@@ -147,14 +233,12 @@ curl -X POST https://yoursite.com/wp-json/wp-ssh/v1/execute \
 | `file_write` | `path`, `content`, `skip_backup?` | Auto-backs up the existing file first. |
 | `file_restore` | `path`, `backup?` (1-3, default 1), `confirm` | Restores from a `.wpssh-bak-N` copy. |
 
-All file paths are resolved with `realpath()` and rejected if they escape `wp-content` — no `../` traversal outside it.
-
 ### Database
 | Action | Params | Notes |
 |---|---|---|
 | `db_query` | `sql`, `confirm?` | `SELECT`/`SHOW`/`DESCRIBE`/`EXPLAIN` run freely. Anything else needs **Allow write queries** enabled in settings *and* `"confirm": true`. |
-| `search_replace` | `search`, `replace`, `tables?`, `dry_run?` | Serialization-safe find/replace across the DB (won't corrupt PHP-serialized values), mirrors `wp search-replace`. |
-| `cache_clear` | `post_id?`, `all_elementor?`, `transients?` | Clears Elementor render/CSS cache, theme compiled-CSS options, object cache, and pings LiteSpeed/WP Super Cache/W3TC/WP Rocket if present. |
+| `search_replace` | `search`, `replace`, `tables?`, `dry_run?` | Serialization-safe find/replace across the DB (will not corrupt PHP-serialized values), mirrors `wp search-replace`. |
+| `cache_clear` | `post_id?`, `all_elementor?`, `transients?` | Clears Elementor render/CSS cache, theme compiled-CSS options, object cache, and pings LiteSpeed / WP Super Cache / W3TC / WP Rocket if present. |
 
 ### WooCommerce
 | Action | Params | Notes |
@@ -169,20 +253,55 @@ All file paths are resolved with `realpath()` and rejected if they escape `wp-co
 |---|---|---|
 | `elementor_data_get` | `post_id` | Raw `_elementor_data` JSON. |
 | `elementor_data_set` | `post_id`, `data` | Validates JSON, writes it, and automatically clears Elementor's CSS/element cache. |
-| `template_export` | `post_id` | Exports a page's Elementor data + page settings/template — for copying a design to another site. |
-| `template_import` | `title`, `elementor_data`, `post_id?`, `post_type?`, `post_status?`, `elementor_page_settings?`, `page_template?` | Creates/updates a post with imported Elementor data. The plugin never talks to other sites directly — you move the exported JSON from one site's response into another site's `template_import` call yourself. |
+| `template_export` | `post_id` | Exports a page's Elementor data + page settings/template, for copying a design to another site. |
+| `template_import` | `title`, `elementor_data`, `post_id?`, `post_type?`, `post_status?`, `elementor_page_settings?`, `page_template?` | Creates/updates a post with imported Elementor data. The plugin never talks to other sites directly: you move the exported JSON from one site's response into another site's `template_import` call yourself. |
 
 ---
 
 ## Settings reference (Tools → WP SSH)
 
-- **Site label** — friendly name returned in `ping`/`site_info`, handy when you manage several sites.
-- **Enable bridge** — master on/off switch.
-- **Read-only mode** — blocks every write action regardless of other settings.
-- **Allow write queries** — required (in addition to `confirm: true`) for non-`SELECT` SQL via `db_query`.
-- **IP allowlist** — one IP per line; empty = any IP (still requires the key).
-- **Health check emails** — hourly self-check with an alert email if something looks wrong.
-- **Regenerate secret key** — invalidates the old key immediately.
+- **Site label:** friendly name returned in `ping` / `site_info`, handy when you manage several sites.
+- **Enable bridge:** master on/off switch.
+- **Read-only mode:** blocks every write action regardless of other settings.
+- **Allow write queries:** required (in addition to `confirm: true`) for non-`SELECT` SQL via `db_query`.
+- **IP allowlist:** one IP per line; empty = any IP (still requires the key).
+- **Health check emails:** hourly self-check with an alert email if something looks wrong.
+- **Regenerate secret key:** invalidates the old key immediately.
+
+---
+
+## FAQ
+
+**Is this a public or multi-tenant service?**
+No. It is a plugin you install on sites you manage yourself. Each install has its own secret key and nothing is shared across installs.
+
+**Does the plugin send my data anywhere?**
+No. It only answers requests that arrive at your own endpoint with a valid key. If you connect an AI provider, the responses you pass to it are handled under that provider's terms.
+
+**Is it safe to give an AI write access?**
+Only as safe as the key and settings you choose. Start in Read-only mode, use the IP allowlist, keep write SQL disabled, and require your approval for destructive actions.
+
+**Does it replace WP-CLI?**
+For common site-management tasks, yes, over HTTPS and without shell access. It is not a full shell and deliberately cannot run arbitrary commands.
+
+**Does it work without WooCommerce or Elementor?**
+Yes. Those action groups are only used when the plugins are active.
+
+**Can I manage multiple sites?**
+Yes. Install it on each site and give each a **Site label**. Each site has its own key.
+
+---
+
+## Roadmap
+
+- [ ] MCP server wrapper (`wp-ssh-mcp`) for Claude Desktop, Cursor, Claude Code and other MCP clients
+- [ ] OpenAPI schema (`openapi.json`) for ChatGPT custom actions and other agents
+- [ ] Multiple keys with per-action scopes (e.g. read-only key, content-only key)
+- [ ] Request signing (HMAC + timestamp) to prevent replay
+- [ ] Write actions (`file_write`, write SQL) off by default
+- [ ] `SECURITY.md` and published threat model
+
+Ideas and pull requests are welcome. Please open an issue first for larger changes.
 
 ---
 
