@@ -101,7 +101,15 @@ what you will do and wait for my approval before sending "confirm": true.
 Use "dry_run": true for search_replace before running it for real.
 ```
 
-> MCP (Model Context Protocol) wrapper and OpenAPI schema are on the [roadmap](#roadmap).
+### Using Claude Desktop, Cursor or another MCP client
+
+Skip the manual HTTP setup above and use [`wp-ssh-mcp`](https://github.com/MSSOFTPC/wp-ssh-mcp) ([npm](https://www.npmjs.com/package/wp-ssh-mcp)) — an MCP server that wraps this plugin's endpoint as native tools:
+
+```bash
+npx -y wp-ssh-mcp
+```
+
+Point it at your site's endpoint and secret key via its own config; it exposes read, write and full modes and ships with an OpenAPI schema for non-MCP agents (e.g. ChatGPT custom actions) too.
 
 ---
 
@@ -301,8 +309,8 @@ Yes. Install it on each site and give each a **Site label**. Each site has its o
 
 ## Roadmap
 
-- [ ] MCP server wrapper (`wp-ssh-mcp`) for Claude Desktop, Cursor, Claude Code and other MCP clients
-- [ ] OpenAPI schema (`openapi.json`) for ChatGPT custom actions and other agents
+- [x] MCP server wrapper ([`wp-ssh-mcp`](https://github.com/MSSOFTPC/wp-ssh-mcp)) for Claude Desktop, Cursor, Claude Code and other MCP clients — [npm package](https://www.npmjs.com/package/wp-ssh-mcp)
+- [x] OpenAPI schema (`openapi.json`) for ChatGPT custom actions and other agents — generated and published with `wp-ssh-mcp`
 - [ ] Multiple keys with per-action scopes (e.g. read-only key, content-only key)
 - [ ] Request signing (HMAC + timestamp) to prevent replay
 - [ ] Write actions (`file_write`, write SQL) off by default
